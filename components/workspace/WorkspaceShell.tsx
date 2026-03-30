@@ -1,3 +1,4 @@
+// components/workspace/WorkspaceShell.tsx
 "use client";
 
 import dynamic from "next/dynamic";
@@ -17,43 +18,45 @@ const Terminal = dynamic(() => import("./terminal/Terminal"), {
 
 export default function WorkspaceShell({ sessionId }: { sessionId: string }) {
   const session = useWorkspaceSession(sessionId);
-  const files = useWorkspaceFiles();
 
-  if (session.loading) {
+  // Files hook now takes sessionId + token + hasContainer
+  const files = useWorkspaceFiles(sessionId, session.token, session.hasContainer);
+
+  if (session.loading || !files.loaded) {
     return (
-      <div className="h-screen flex items-center justify-center bg-[#0b1020] text-white/60">
+      <div className="h-screen flex items-center justify-center bg-ds-base text-ds-text-dim">
         Loading workspace...
       </div>
     );
   }
 
   return (
-    <div className="h-screen flex flex-col bg-[#0b1020] text-[#d9e1f2]">
+    <div className="h-screen flex flex-col bg-ds-base text-ds-text-secondary">
       <Topbar session={session.session} />
 
       <div className="flex-1 min-h-0">
         <PanelGroup direction="horizontal">
           <Panel defaultSize={18} minSize={14}>
             <Explorer
-                paths={files.paths}
-                activeFile={files.activeFile}
-                dirtyFiles={files.dirtyFiles}
-                expandedFolders={files.expandedFolders}
-                createState={files.createState}
-                renameState={files.renameState}
-                setActiveFile={files.setActiveFile}
-                toggleFolder={files.toggleFolder}
-                startCreate={files.startCreate}
-                cancelCreate={files.cancelCreate}
-                commitCreate={files.commitCreate}
-                startRename={files.startRename}
-                cancelRename={files.cancelRename}
-                renamePath={files.renamePath}
-                deletePath={files.deletePath}
-                />
+              paths={files.paths}
+              activeFile={files.activeFile}
+              dirtyFiles={files.dirtyFiles}
+              expandedFolders={files.expandedFolders}
+              createState={files.createState}
+              renameState={files.renameState}
+              setActiveFile={files.setActiveFile}
+              toggleFolder={files.toggleFolder}
+              startCreate={files.startCreate}
+              cancelCreate={files.cancelCreate}
+              commitCreate={files.commitCreate}
+              startRename={files.startRename}
+              cancelRename={files.cancelRename}
+              renamePath={files.renamePath}
+              deletePath={files.deletePath}
+            />
           </Panel>
 
-          <PanelResizeHandle className="w-[1px] bg-white/10" />
+          <PanelResizeHandle className="w-[1px] bg-ds-border" />
 
           <Panel defaultSize={58}>
             <PanelGroup direction="vertical">
@@ -70,7 +73,7 @@ export default function WorkspaceShell({ sessionId }: { sessionId: string }) {
                 />
               </Panel>
 
-              <PanelResizeHandle className="h-[1px] bg-white/10" />
+              <PanelResizeHandle className="h-[1px] bg-ds-border" />
 
               <Panel defaultSize={30} minSize={18}>
                 <Terminal sessionId={sessionId} token={session.token} />
@@ -78,7 +81,7 @@ export default function WorkspaceShell({ sessionId }: { sessionId: string }) {
             </PanelGroup>
           </Panel>
 
-          <PanelResizeHandle className="w-[1px] bg-white/10" />
+          <PanelResizeHandle className="w-[1px] bg-ds-border" />
 
           <Panel defaultSize={24}>
             <RightSidebar {...session} />
@@ -90,11 +93,11 @@ export default function WorkspaceShell({ sessionId }: { sessionId: string }) {
         connected={session.connected}
         activeFile={files.activeFile}
         language={
-            files.activeFile?.split(".").pop()?.toLowerCase() === "ts"
+          files.activeFile?.split(".").pop()?.toLowerCase() === "ts"
             ? "typescript"
             : files.activeFile?.split(".").pop()?.toLowerCase() || "plaintext"
         }
-        />
+      />
     </div>
   );
 }

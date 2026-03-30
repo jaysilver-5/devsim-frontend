@@ -124,10 +124,10 @@ export default function Explorer(props: ExplorerProps) {
 
   return (
     <div
-      className="relative h-full flex flex-col bg-[#0f1524] border-r border-white/10"
+      className="relative h-full flex flex-col bg-ds-surface"
       onContextMenu={(e) => e.preventDefault()}
     >
-      <div className="h-10 flex items-center justify-between px-2 border-b border-white/10">
+      <div className="h-10 flex items-center justify-between px-2 border-b border-ds-border">
         <span className="text-[11px] uppercase tracking-[0.16em] text-white/40">
           Explorer
         </span>
@@ -243,7 +243,7 @@ function TreeNodeRow({
     <div>
       <div
         className={[
-          "group h-7 flex items-center rounded px-1.5 text-[13px]",
+          "group h-7 flex items-center text-[12px]",
           isActive ? "bg-[#16213a] text-white" : "text-white/70 hover:bg-white/5",
         ].join(" ")}
         style={{ paddingLeft: 8 + depth * 14 }}
@@ -400,7 +400,7 @@ function InlineCreateRow({
 }) {
   return (
     <div className="py-1" style={{ paddingLeft: 8 + depth * 14 }}>
-      <div className="h-7 flex items-center gap-2 rounded border border-[#2f81f7]/30 bg-[#101827] px-2">
+      <div className="h-7 flex items-center gap-2 rounded bg-ds-elevated px-2">
         {mode === "folder" ? (
           <FolderOpen size={15} className="text-[#dcb76d]" />
         ) : (
@@ -446,7 +446,7 @@ function InlineRenameRow({
   }, []);
 
   return (
-    <div className="flex flex-1 items-center gap-2 rounded border border-[#2f81f7]/30 bg-[#101827] px-2">
+    <div className="flex flex-1 items-center gap-2 rounded bg-ds-elevated px-2">
       {type === "folder" ? (
         <FolderOpen size={15} className="shrink-0 text-[#dcb76d]" />
       ) : (
@@ -492,7 +492,7 @@ function ContextMenu({
 }) {
   return (
     <div
-      className="fixed z-50 min-w-40 rounded-md border border-white/10 bg-[#111827] p-1 shadow-2xl"
+      className="fixed z-50 min-w-[160px] rounded-md border border-white/10 bg-[#111827] p-1 shadow-2xl"
       style={{ left: x, top: y }}
       onClick={(e) => e.stopPropagation()}
     >

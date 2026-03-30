@@ -1,9 +1,12 @@
+// hooks/workspace/useWorkspaceSession.ts
 "use client";
 
 import { useAuth } from "@clerk/nextjs";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { api } from "@/lib/api";
 import { connectSocket, disconnectSocket, getSocket } from "@/lib/socket";
 import { WsEvent } from "@/lib/types";
+import type { ChatMessage, TeamTicket } from "@/lib/types";
 
 type Ticket = {
   id: string;
@@ -28,37 +31,23 @@ type WorkspaceSessionData = {
   currentTicketSeq: number;
   spriteId: string | null;
   simulation?: Simulation | null;
-  teamTickets?: Ticket[];
+  teamTickets?: TeamTicket[];
 };
 
-type ChatMessage = {
-  id: string;
-  content: string;
-  persona?: string;
-  personaName?: string;
-  createdAt?: string;
-};
-
-type UseWorkspaceSessionReturn = {
+export type UseWorkspaceSessionReturn = {
   token: string | null;
   loading: boolean;
   connected: boolean;
+  hasContainer: boolean;
   session: WorkspaceSessionData | null;
   messages: ChatMessage[];
   chatInput: string;
   chatSending: boolean;
-  teamTickets: Ticket[];
+  teamTickets: TeamTicket[];
   setChatInput: (value: string) => void;
   sendChat: () => Promise<void>;
   refreshSession: () => Promise<void>;
 };
-
-async function safeJson<T>(res: Response): Promise<T> {
-  if (!res.ok) {
-    throw new Error(`Request failed: ${res.status}`);
-  }
-  return res.json() as Promise<T>;
-}
 
 export default function useWorkspaceSession(
   sessionId: string
@@ -71,89 +60,40 @@ export default function useWorkspaceSession(
 
   const [session, setSession] = useState<WorkspaceSessionData | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [teamTickets, setTeamTickets] = useState<Ticket[]>([]);
+  const [teamTickets, setTeamTickets] = useState<TeamTicket[]>([]);
 
   const [chatInput, setChatInput] = useState("");
   const [chatSending, setChatSending] = useState(false);
 
-  const apiBase = useMemo(() => {
-    return (
-      process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") ||
-      "http://localhost:4000/api"
-    );
-  }, []);
+  const hasContainer = !!session?.spriteId;
 
-  const authHeaders = useCallback(
-    (bearer?: string | null) => {
-      const headers: Record<string, string> = {
-        "Content-Type": "application/json",
-      };
-
-      if (bearer) {
-        headers.Authorization = `Bearer ${bearer}`;
-      }
-
-      return headers;
-    },
-    []
-  );
-
-  const fetchSession = useCallback(
-    async (bearer: string) => {
-      const res = await fetch(`${apiBase}/workspace/sessions/${sessionId}`, {
-        method: "GET",
-        headers: authHeaders(bearer),
-        cache: "no-store",
+  // ── Get auth token ────────────────────────────────
+  useEffect(() => {
+    let mounted = true;
+    getToken()
+      .then((value) => {
+        if (mounted) setToken(value ?? null);
+      })
+      .catch((err) => {
+        console.error("[workspace] Failed to get token:", err);
+        if (mounted) setLoading(false);
       });
+    return () => { mounted = false; };
+  }, [getToken]);
 
-      return safeJson<WorkspaceSessionData>(res);
-    },
-    [apiBase, authHeaders, sessionId]
-  );
-
-  const fetchMessages = useCallback(
-    async (bearer: string) => {
-      const possibleEndpoints = [
-        `${apiBase}/chat/sessions/${sessionId}/messages`,
-        `${apiBase}/chat/${sessionId}/messages`,
-        `${apiBase}/workspace/sessions/${sessionId}/messages`,
-      ];
-
-      for (const url of possibleEndpoints) {
-        try {
-          const res = await fetch(url, {
-            method: "GET",
-            headers: authHeaders(bearer),
-            cache: "no-store",
-          });
-
-          if (!res.ok) continue;
-
-          const data = (await res.json()) as ChatMessage[] | { messages?: ChatMessage[] };
-          if (Array.isArray(data)) return data;
-          if (Array.isArray(data?.messages)) return data.messages;
-        } catch {
-          continue;
-        }
-      }
-
-      return [] as ChatMessage[];
-    },
-    [apiBase, authHeaders, sessionId]
-  );
-
+  // ── Refresh session data ──────────────────────────
   const refreshSession = useCallback(async () => {
     if (!token) return;
-
     try {
-      const nextSession = await fetchSession(token);
-      setSession(nextSession);
-      setTeamTickets(nextSession.teamTickets ?? []);
-    } catch (error) {
-      console.error("[workspace] failed to refresh session", error);
+      const sess = (await api.workspace.getSession(sessionId, token)) as WorkspaceSessionData;
+      setSession(sess);
+      setTeamTickets(sess.teamTickets ?? []);
+    } catch (err) {
+      console.error("[workspace] Refresh failed:", err);
     }
-  }, [fetchSession, token]);
+  }, [sessionId, token]);
 
+  // ── Send chat message ─────────────────────────────
   const sendChat = useCallback(async () => {
     if (!token || !chatInput.trim()) return;
 
@@ -161,177 +101,151 @@ export default function useWorkspaceSession(
     setChatSending(true);
     setChatInput("");
 
-    const optimisticMessage: ChatMessage = {
-      id: `local-${Date.now()}`,
-      content,
-      personaName: "You",
-    };
+    // Parse @mentions to determine target persona
+    const mentionMatch = content.match(/@(sarah|marcus|priya|james)/i);
+    const target = mentionMatch ? mentionMatch[1].toUpperCase() : "PM";
 
-    setMessages((prev) => [...prev, optimisticMessage]);
-
-    const possibleEndpoints = [
-      `${apiBase}/chat/sessions/${sessionId}/messages`,
-      `${apiBase}/chat/${sessionId}/messages`,
-      `${apiBase}/workspace/sessions/${sessionId}/messages`,
-    ];
+    // Optimistic update
+    const optimisticId = `local-${Date.now()}`;
+    setMessages((prev) => [
+      ...prev,
+      { id: optimisticId, sessionId, sender: "CANDIDATE", content, metadata: {}, createdAt: new Date().toISOString() } as ChatMessage,
+    ]);
 
     try {
-      let sent = false;
+      // POST /chat/:sessionId/message { content, target }
+      const result = (await api.chat.sendMessage(sessionId, content, target, token)) as any;
 
-      for (const url of possibleEndpoints) {
-        try {
-          const res = await fetch(url, {
-            method: "POST",
-            headers: authHeaders(token),
-            body: JSON.stringify({ content }),
-          });
+      // Remove optimistic message and add real responses
+      setMessages((prev) => {
+        const without = prev.filter((m) => m.id !== optimisticId);
+        const next = [...without];
 
-          if (!res.ok) continue;
-
-          sent = true;
-          break;
-        } catch {
-          continue;
+        // The backend may return { userMessage, aiMessage } or an array
+        if (result.userMessage) {
+          if (!next.some((m) => m.id === result.userMessage.id)) next.push(result.userMessage);
         }
-      }
+        if (result.aiMessage) {
+          if (!next.some((m) => m.id === result.aiMessage.id)) next.push(result.aiMessage);
+        }
+        if (Array.isArray(result)) {
+          result.forEach((m: ChatMessage) => {
+            if (!next.some((x) => x.id === m.id)) next.push(m);
+          });
+        }
 
-      if (!sent) {
-        throw new Error("Unable to send message");
-      }
-    } catch (error) {
-      console.error("[workspace] failed to send chat", error);
-      setMessages((prev) => prev.filter((msg) => msg.id !== optimisticMessage.id));
+        return next;
+      });
+    } catch (err) {
+      console.error("[workspace] Chat send failed:", err);
+      // Remove optimistic message on failure, restore input
+      setMessages((prev) => prev.filter((m) => m.id !== optimisticId));
       setChatInput(content);
     } finally {
       setChatSending(false);
     }
-  }, [apiBase, authHeaders, chatInput, sessionId, token]);
+  }, [chatInput, sessionId, token]);
 
+  // ── Boot: load session + chat + connect socket ────
   useEffect(() => {
-    let mounted = true;
-
-    getToken()
-      .then((value) => {
-        if (!mounted) return;
-        setToken(value ?? null);
-      })
-      .catch((error) => {
-        console.error("[workspace] failed to get token", error);
-        if (mounted) setLoading(false);
-      });
-
-    return () => {
-      mounted = false;
-    };
-  }, [getToken]);
-
-    useEffect(() => {
     if (!token) return;
-
-    const bearer = token;
     let mounted = true;
 
     async function boot() {
-        try {
+      try {
         setLoading(true);
 
-        const [nextSession, nextMessages] = await Promise.all([
-            fetchSession(bearer),
-            fetchMessages(bearer),
-        ]);
-
+        // 1. Load session
+        const sess = (await api.workspace.getSession(sessionId, token!)) as WorkspaceSessionData;
         if (!mounted) return;
+        setSession(sess);
+        setTeamTickets(sess.teamTickets ?? []);
 
-        setSession(nextSession);
-        setTeamTickets(nextSession.teamTickets ?? []);
-        setMessages(nextMessages);
+        // 2. Load chat history — GET /chat/:sessionId/history
+        try {
+          let history = (await api.chat.getHistory(sessionId, token!)) as ChatMessage[];
 
-        const socket = connectSocket(bearer, sessionId);
-
-        const handleConnect = () => {
-            if (!mounted) return;
-            setConnected(true);
-        };
-
-        const handleDisconnect = () => {
-            if (!mounted) return;
-            setConnected(false);
-        };
-
-        const handleChatMessage = (payload: ChatMessage) => {
-            if (!mounted) return;
-            setMessages((prev) => {
-            if (prev.some((msg) => msg.id === payload.id)) return prev;
-            return [...prev, payload];
-            });
-        };
-
-        const handleChatHistory = (payload: ChatMessage[]) => {
-            if (!mounted || !Array.isArray(payload)) return;
-            setMessages(payload);
-        };
-
-        const handleBoardUpdate = (payload: { teamTickets?: Ticket[] }) => {
-            if (!mounted) return;
-            if (Array.isArray(payload?.teamTickets)) {
-            setTeamTickets(payload.teamTickets);
+          // Send welcome message if chat is empty
+          if (history.length === 0) {
+            try {
+              await api.workspace.sendWelcome(sessionId, token!);
+              history = (await api.chat.getHistory(sessionId, token!)) as ChatMessage[];
+            } catch {
+              // Welcome failed — non-fatal
             }
-        };
+          }
 
-        const handleSessionUpdate = (payload: Partial<WorkspaceSessionData>) => {
-            if (!mounted) return;
-            setSession((prev) => {
-            if (!prev) return prev;
-            const merged = { ...prev, ...payload };
-            if (Array.isArray(payload.teamTickets)) {
-                merged.teamTickets = payload.teamTickets;
-            }
-            return merged;
-            });
-
-            if (Array.isArray(payload.teamTickets)) {
-            setTeamTickets(payload.teamTickets);
-            }
-        };
-
-        socket.on("connect", handleConnect);
-        socket.on("disconnect", handleDisconnect);
-        socket.on(WsEvent.CHAT_MESSAGE, handleChatMessage);
-        socket.on(WsEvent.CHAT_HISTORY, handleChatHistory);
-        socket.on(WsEvent.BOARD_UPDATE, handleBoardUpdate);
-        socket.on(WsEvent.SESSION_UPDATE, handleSessionUpdate);
-
-        setConnected(socket.connected);
-        } catch (error) {
-        console.error("[workspace] failed to boot session", error);
-        } finally {
-        if (mounted) setLoading(false);
+          if (mounted) setMessages(history);
+        } catch (err) {
+          console.warn("[workspace] Chat history failed:", err);
         }
+
+        // 3. Connect socket for real-time updates
+        const socket = connectSocket(token!, sessionId);
+
+        socket.on("connect", () => {
+          if (mounted) setConnected(true);
+        });
+
+        socket.on("disconnect", () => {
+          if (mounted) setConnected(false);
+        });
+
+        socket.on(WsEvent.CHAT_MESSAGE, (msg: ChatMessage) => {
+          if (!mounted) return;
+          setMessages((prev) =>
+            prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]
+          );
+        });
+
+        socket.on(WsEvent.CHAT_HISTORY, (data: ChatMessage[]) => {
+          if (mounted && Array.isArray(data)) setMessages(data);
+        });
+
+        socket.on(WsEvent.BOARD_UPDATE, (data: { teamTickets?: TeamTicket[] }) => {
+          if (mounted && Array.isArray(data?.teamTickets)) {
+            setTeamTickets(data.teamTickets);
+          }
+        });
+
+        socket.on(WsEvent.SESSION_UPDATE, (data: Partial<WorkspaceSessionData>) => {
+          if (!mounted) return;
+          setSession((prev) => (prev ? { ...prev, ...data } : prev));
+          if (Array.isArray(data.teamTickets)) {
+            setTeamTickets(data.teamTickets);
+          }
+        });
+
+        if (mounted) setConnected(socket.connected);
+      } catch (err) {
+        console.error("[workspace] Boot failed:", err);
+      } finally {
+        if (mounted) setLoading(false);
+      }
     }
 
-    void boot();
+    boot();
 
     return () => {
-        mounted = false;
-        const socket = getSocket();
-
-        if (socket) {
+      mounted = false;
+      const socket = getSocket();
+      if (socket) {
         socket.off("connect");
         socket.off("disconnect");
         socket.off(WsEvent.CHAT_MESSAGE);
         socket.off(WsEvent.CHAT_HISTORY);
         socket.off(WsEvent.BOARD_UPDATE);
         socket.off(WsEvent.SESSION_UPDATE);
-        }
-
-        disconnectSocket();
+      }
+      disconnectSocket();
     };
-    }, [fetchMessages, fetchSession, sessionId, token]);
+  }, [sessionId, token]);
 
   return {
     token,
     loading,
     connected,
+    hasContainer,
     session,
     messages,
     chatInput,
