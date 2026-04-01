@@ -1,8 +1,7 @@
-// hooks/workspace/useWorkspaceSession.ts
 "use client";
 
 import { useAuth } from "@clerk/nextjs";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { connectSocket, disconnectSocket, getSocket } from "@/lib/socket";
 import { WsEvent } from "@/lib/types";
@@ -65,69 +64,97 @@ export default function useWorkspaceSession(
   const [chatInput, setChatInput] = useState("");
   const [chatSending, setChatSending] = useState(false);
 
+  const socketCleanupRef = useRef<(() => void) | null>(null);
+
   const hasContainer = !!session?.spriteId;
 
-  // ── Get auth token ────────────────────────────────
-  useEffect(() => {
-    let mounted = true;
-    getToken()
-      .then((value) => {
-        if (mounted) setToken(value ?? null);
-      })
-      .catch((err) => {
-        console.error("[workspace] Failed to get token:", err);
-        if (mounted) setLoading(false);
-      });
-    return () => { mounted = false; };
+  const getFreshToken = useCallback(async () => {
+    const fresh = await getToken();
+    if (!fresh) {
+      throw new Error("Missing auth token");
+    }
+    setToken(fresh);
+    return fresh;
   }, [getToken]);
 
-  // ── Refresh session data ──────────────────────────
+  useEffect(() => {
+    let mounted = true;
+
+    getFreshToken()
+      .catch((err) => {
+        console.error("[workspace] Failed to get token:", err);
+      })
+      .finally(() => {
+        if (mounted) setLoading(false);
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [getFreshToken]);
+
   const refreshSession = useCallback(async () => {
-    if (!token) return;
     try {
-      const sess = (await api.workspace.getSession(sessionId, token)) as WorkspaceSessionData;
+      const freshToken = await getFreshToken();
+      const sess = (await api.workspace.getSession(
+        sessionId,
+        freshToken
+      )) as WorkspaceSessionData;
+
       setSession(sess);
       setTeamTickets(sess.teamTickets ?? []);
     } catch (err) {
       console.error("[workspace] Refresh failed:", err);
     }
-  }, [sessionId, token]);
+  }, [getFreshToken, sessionId]);
 
-  // ── Send chat message ─────────────────────────────
   const sendChat = useCallback(async () => {
-    if (!token || !chatInput.trim()) return;
+    if (!chatInput.trim()) return;
 
     const content = chatInput.trim();
     setChatSending(true);
     setChatInput("");
 
-    // Parse @mentions to determine target persona
     const mentionMatch = content.match(/@(sarah|marcus|priya|james)/i);
     const target = mentionMatch ? mentionMatch[1].toUpperCase() : "PM";
 
-    // Optimistic update
     const optimisticId = `local-${Date.now()}`;
+
     setMessages((prev) => [
       ...prev,
-      { id: optimisticId, sessionId, sender: "CANDIDATE", content, metadata: {}, createdAt: new Date().toISOString() } as ChatMessage,
+      {
+        id: optimisticId,
+        sessionId,
+        sender: "CANDIDATE",
+        content,
+        metadata: {},
+        createdAt: new Date().toISOString(),
+      } as ChatMessage,
     ]);
 
     try {
-      // POST /chat/:sessionId/message { content, target }
-      const result = (await api.chat.sendMessage(sessionId, content, target, token)) as any;
+      const freshToken = await getFreshToken();
+      const result = (await api.chat.sendMessage(
+        sessionId,
+        content,
+        target,
+        freshToken
+      )) as any;
 
-      // Remove optimistic message and add real responses
       setMessages((prev) => {
         const without = prev.filter((m) => m.id !== optimisticId);
         const next = [...without];
 
-        // The backend may return { userMessage, aiMessage } or an array
-        if (result.userMessage) {
-          if (!next.some((m) => m.id === result.userMessage.id)) next.push(result.userMessage);
+        const userMessage = result.userMessage ?? result.candidateMessage;
+
+        if (userMessage && !next.some((m) => m.id === userMessage.id)) {
+          next.push(userMessage);
         }
-        if (result.aiMessage) {
-          if (!next.some((m) => m.id === result.aiMessage.id)) next.push(result.aiMessage);
+
+        if (result.aiMessage && !next.some((m) => m.id === result.aiMessage.id)) {
+          next.push(result.aiMessage);
         }
+
         if (Array.isArray(result)) {
           result.forEach((m: ChatMessage) => {
             if (!next.some((x) => x.id === m.id)) next.push(m);
@@ -138,40 +165,47 @@ export default function useWorkspaceSession(
       });
     } catch (err) {
       console.error("[workspace] Chat send failed:", err);
-      // Remove optimistic message on failure, restore input
       setMessages((prev) => prev.filter((m) => m.id !== optimisticId));
       setChatInput(content);
     } finally {
       setChatSending(false);
     }
-  }, [chatInput, sessionId, token]);
+  }, [chatInput, getFreshToken, sessionId]);
 
-  // ── Boot: load session + chat + connect socket ────
   useEffect(() => {
-    if (!token) return;
     let mounted = true;
 
     async function boot() {
       try {
         setLoading(true);
 
-        // 1. Load session
-        const sess = (await api.workspace.getSession(sessionId, token!)) as WorkspaceSessionData;
+        const freshToken = await getFreshToken();
+
+        const sess = (await api.workspace.getSession(
+          sessionId,
+          freshToken
+        )) as WorkspaceSessionData;
+
         if (!mounted) return;
+
         setSession(sess);
         setTeamTickets(sess.teamTickets ?? []);
 
-        // 2. Load chat history — GET /chat/:sessionId/history
         try {
-          let history = (await api.chat.getHistory(sessionId, token!)) as ChatMessage[];
+          let history = (await api.chat.getHistory(
+            sessionId,
+            freshToken
+          )) as ChatMessage[];
 
-          // Send welcome message if chat is empty
           if (history.length === 0) {
             try {
-              await api.workspace.sendWelcome(sessionId, token!);
-              history = (await api.chat.getHistory(sessionId, token!)) as ChatMessage[];
+              await api.workspace.sendWelcome(sessionId, freshToken);
+              history = (await api.chat.getHistory(
+                sessionId,
+                freshToken
+              )) as ChatMessage[];
             } catch {
-              // Welcome failed — non-fatal
+              // non-fatal
             }
           }
 
@@ -180,8 +214,9 @@ export default function useWorkspaceSession(
           console.warn("[workspace] Chat history failed:", err);
         }
 
-        // 3. Connect socket for real-time updates
-        const socket = connectSocket(token!, sessionId);
+        socketCleanupRef.current?.();
+
+        const socket = connectSocket(freshToken, sessionId);
 
         socket.on("connect", () => {
           if (mounted) setConnected(true);
@@ -228,6 +263,9 @@ export default function useWorkspaceSession(
 
     return () => {
       mounted = false;
+      socketCleanupRef.current?.();
+      socketCleanupRef.current = null;
+
       const socket = getSocket();
       if (socket) {
         socket.off("connect");
@@ -237,22 +275,38 @@ export default function useWorkspaceSession(
         socket.off(WsEvent.BOARD_UPDATE);
         socket.off(WsEvent.SESSION_UPDATE);
       }
+
       disconnectSocket();
     };
-  }, [sessionId, token]);
+  }, [getFreshToken, sessionId]);
 
-  return {
-    token,
-    loading,
-    connected,
-    hasContainer,
-    session,
-    messages,
-    chatInput,
-    chatSending,
-    teamTickets,
-    setChatInput,
-    sendChat,
-    refreshSession,
-  };
+  return useMemo(
+    () => ({
+      token,
+      loading,
+      connected,
+      hasContainer,
+      session,
+      messages,
+      chatInput,
+      chatSending,
+      teamTickets,
+      setChatInput,
+      sendChat,
+      refreshSession,
+    }),
+    [
+      token,
+      loading,
+      connected,
+      hasContainer,
+      session,
+      messages,
+      chatInput,
+      chatSending,
+      teamTickets,
+      sendChat,
+      refreshSession,
+    ]
+  );
 }
