@@ -1,9 +1,13 @@
+// lib/socket.ts
 import { io, Socket } from "socket.io-client";
 import { WsEvent } from "./types";
 
-const WS_URL = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api").replace(/\/api\/?$/, "");
+const WS_URL = (
+  process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api"
+).replace(/\/api\/?$/, "");
 
 let socket: Socket | null = null;
+let hasLoggedError = false;
 
 export function getSocket(): Socket | null {
   return socket;
@@ -15,18 +19,22 @@ export function connectSocket(token: string, sessionId: string): Socket {
     socket = null;
   }
 
+  hasLoggedError = false;
+
   socket = io(WS_URL, {
     path: "/ws",
     auth: { token },
     query: { sessionId },
     transports: ["websocket", "polling"],
     reconnection: true,
-    reconnectionAttempts: 10,
-    reconnectionDelay: 1000,
-    reconnectionDelayMax: 5000,
+    reconnectionAttempts: 5,
+    reconnectionDelay: 2000,
+    reconnectionDelayMax: 10000,
+    timeout: 5000,
   });
 
   socket.on("connect", () => {
+    hasLoggedError = false;
     console.log("[ws] Connected:", socket?.id);
   });
 
@@ -34,8 +42,12 @@ export function connectSocket(token: string, sessionId: string): Socket {
     console.log("[ws] Disconnected:", reason);
   });
 
+  // Only log connection error once to avoid spam
   socket.on("connect_error", (err) => {
-    console.error("[ws] Connection error:", err.message);
+    if (!hasLoggedError) {
+      console.warn("[ws] Connection failed — falling back to REST:", err.message);
+      hasLoggedError = true;
+    }
   });
 
   socket.on(WsEvent.ERROR, (data: { message: string }) => {
@@ -53,10 +65,7 @@ export function disconnectSocket() {
 }
 
 export function emitEvent(event: WsEvent, data?: unknown) {
-  if (!socket?.connected) {
-    console.warn("[ws] Cannot emit, not connected");
-    return;
-  }
+  if (!socket?.connected) return;
   socket.emit(event, data);
 }
 
@@ -64,13 +73,9 @@ export function onEvent<T = unknown>(
   event: WsEvent,
   handler: (data: T) => void
 ): () => void {
-  if (!socket) {
-    console.warn("[ws] Cannot listen, no socket");
-    return () => {};
-  }
+  if (!socket) return () => {};
 
   socket.on(event, handler as (...args: unknown[]) => void);
-
   return () => {
     socket?.off(event, handler as (...args: unknown[]) => void);
   };

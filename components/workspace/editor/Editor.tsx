@@ -1,3 +1,4 @@
+// components/workspace/editor/Editor.tsx
 "use client";
 
 import MonacoEditor from "@monaco-editor/react";
@@ -16,46 +17,26 @@ type EditorProps = {
 
 function getLanguage(path: string) {
   const ext = path.split(".").pop()?.toLowerCase();
-
-  switch (ext) {
-    case "ts":
-    case "tsx":
-      return "typescript";
-    case "js":
-    case "jsx":
-      return "javascript";
-    case "json":
-      return "json";
-    case "md":
-      return "markdown";
-    case "css":
-      return "css";
-    case "html":
-      return "html";
-    case "py":
-      return "python";
-    default:
-      return "plaintext";
-  }
+  const map: Record<string, string> = {
+    ts: "typescript", tsx: "typescript", js: "javascript", jsx: "javascript",
+    json: "json", md: "markdown", css: "css", html: "html", py: "python",
+    prisma: "graphql", env: "ini", yaml: "yaml", yml: "yaml",
+  };
+  return map[ext || ""] ?? "plaintext";
 }
 
 export default function Editor({
-  openFiles,
-  activeFile,
-  fileMap,
-  dirtyFiles,
-  setActiveFile,
-  closeFile,
-  updateFile,
-  saveFile,
+  openFiles, activeFile, fileMap, dirtyFiles,
+  setActiveFile, closeFile, updateFile, saveFile,
 }: EditorProps) {
   const value = activeFile ? fileMap[activeFile] ?? "" : "";
 
   return (
-    <div className="h-full flex flex-col bg-[#0d1321]">
-      <div className="h-10 flex items-center border-b border-white/10 bg-[#0f1728] overflow-x-auto">
+    <div className="h-full flex flex-col bg-ds-base">
+      {/* Tab bar */}
+      <div className="h-9 flex items-center border-b border-ds-border bg-ds-surface/50 overflow-x-auto shrink-0">
         {openFiles.length === 0 ? (
-          <div className="px-3 text-xs text-white/35">No file open</div>
+          <div className="px-3 text-[11px] text-ds-text-ghost">No file open</div>
         ) : (
           openFiles.map((path) => {
             const active = path === activeFile;
@@ -64,44 +45,47 @@ export default function Editor({
             return (
               <div
                 key={path}
-                className={[
-                  "group h-full min-w-[140px] max-w-[220px] flex items-center gap-2 px-3 border-r border-white/10",
-                  active ? "bg-[#111b2e] text-white" : "text-white/55 hover:bg-white/5",
-                ].join(" ")}
+                className={`group h-full min-w-[120px] max-w-[200px] flex items-center gap-1.5 px-3 text-[11px] transition-colors ${
+                  active
+                    ? "bg-ds-base text-ds-text-secondary border-b-2 border-b-ds-primary"
+                    : "text-ds-text-dim hover:bg-ds-elevated/50"
+                }`}
               >
                 <button
                   onClick={() => setActiveFile(path)}
-                  className="flex-1 truncate text-left text-xs"
+                  className="flex-1 truncate text-left"
                 >
                   {path.split("/").pop()}
-                  {dirty ? " •" : ""}
+                  {dirty && <span className="ml-1 text-ds-warning">●</span>}
                 </button>
 
                 <button
-                  onClick={() => closeFile(path)}
-                  className="opacity-0 group-hover:opacity-100 text-white/35 hover:text-white"
+                  onClick={(e) => { e.stopPropagation(); closeFile(path); }}
+                  className="opacity-0 group-hover:opacity-100 text-ds-text-ghost hover:text-ds-text-muted transition-opacity"
                 >
-                  <X size={14} />
+                  <X size={13} />
                 </button>
               </div>
             );
           })
         )}
 
-        <div className="ml-auto px-3">
+        {/* Save button */}
+        {activeFile && dirtyFiles.has(activeFile) && (
           <button
             onClick={() => saveFile()}
-            className="px-2 py-1 rounded border border-white/10 bg-white/5 text-[11px] text-white/70 hover:bg-white/10"
+            className="ml-auto mr-2 px-2 py-0.5 rounded text-[10px] text-ds-primary-muted bg-ds-primary/8 hover:bg-ds-primary/15 transition-colors shrink-0"
           >
             Save
           </button>
-        </div>
+        )}
       </div>
 
+      {/* Editor body */}
       <div className="flex-1 min-h-0">
         {!activeFile ? (
-          <div className="h-full flex items-center justify-center text-white/30">
-            Select a file
+          <div className="h-full flex items-center justify-center text-ds-text-ghost text-sm">
+            Select a file from the explorer
           </div>
         ) : (
           <MonacoEditor
@@ -119,6 +103,8 @@ export default function Editor({
               automaticLayout: true,
               tabSize: 2,
               padding: { top: 12, bottom: 12 },
+              renderLineHighlight: "gutter",
+              fontFamily: 'ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace',
             }}
           />
         )}
