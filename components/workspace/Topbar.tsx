@@ -1,4 +1,3 @@
-// components/workspace/Topbar.tsx
 "use client";
 
 import { useRouter } from "next/navigation";
@@ -13,20 +12,22 @@ type Props = {
   onAdvance: () => void;
 };
 
-export default function Topbar({ session, sessionId, token, connected, onAdvance }: Props) {
+export default function Topbar({
+  session,
+  sessionId,
+  token,
+  connected,
+  onAdvance,
+}: Props) {
   const router = useRouter();
   const { user } = useUser();
 
-  const currentTicket = session?.simulation?.tickets?.find(
-    (t: any) => t.sequence === session?.currentTicketSeq
-  );
   const totalTickets = session?.simulation?.tickets?.length ?? 5;
   const currentSeq = session?.currentTicketSeq ?? 1;
   const hasContainer = !!session?.spriteId;
 
   return (
     <div className="flex items-center h-11 px-3 bg-ds-base border-b border-ds-border shrink-0">
-      {/* Left — logo + simulation info */}
       <div className="flex items-center gap-3 min-w-0">
         <button
           onClick={() => router.push("/dashboard")}
@@ -42,7 +43,6 @@ export default function Topbar({ session, sessionId, token, connected, onAdvance
             {session?.simulation?.title ?? "Sprint"}
           </span>
 
-          {/* Ticket progress dots */}
           <div className="flex items-center gap-1">
             {Array.from({ length: totalTickets }, (_, i) => {
               const seq = i + 1;
@@ -68,17 +68,14 @@ export default function Topbar({ session, sessionId, token, connected, onAdvance
         </div>
       </div>
 
-      {/* Center — eval actions */}
       <div className="flex-1 flex justify-center">
         <EvalActions
           sessionId={sessionId}
-          token={token}
           currentTicketSeq={currentSeq}
           onAdvance={onAdvance}
         />
       </div>
 
-      {/* Right — connection + avatar */}
       <div className="flex items-center gap-3">
         <div className="flex items-center gap-1.5">
           <div
@@ -104,7 +101,8 @@ export default function Topbar({ session, sessionId, token, connected, onAdvance
         </div>
 
         <div className="w-6 h-6 rounded-full bg-ds-elevated flex items-center justify-center text-[9px] font-bold text-ds-primary-muted">
-          {user?.firstName?.[0] || "?"}{user?.lastName?.[0] || ""}
+          {user?.firstName?.[0] || "?"}
+          {user?.lastName?.[0] || ""}
         </div>
       </div>
     </div>

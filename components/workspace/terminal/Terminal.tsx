@@ -23,7 +23,7 @@ type SpawnResponse = {
   error?: string;
 };
 
-export default function Terminal({ sessionId, token }: Props) {
+export default function Terminal({ sessionId }: Props) {
   const hostRef = useRef<HTMLDivElement | null>(null);
 
   const xtermRef = useRef<any>(null);
@@ -65,91 +65,97 @@ export default function Terminal({ sessionId, token }: Props) {
     xtermRef.current?.write(`${text}\r\n`);
   }, []);
 
-  const clearAndWriteStatus = useCallback((text: string) => {
-    if (!xtermRef.current) return;
-    xtermRef.current.clear();
-    writeLine(`\x1b[90m${text}\x1b[0m`);
-  }, [writeLine]);
+  const clearAndWriteStatus = useCallback(
+    (text: string) => {
+      if (!xtermRef.current) return;
+      xtermRef.current.clear();
+      writeLine(`\x1b[90m${text}\x1b[0m`);
+    },
+    [writeLine]
+  );
 
-  const bindSocketListeners = useCallback((socket: Socket) => {
-    if (boundSocketRef.current === socket) {
+  const bindSocketListeners = useCallback(
+    (socket: Socket) => {
+      if (boundSocketRef.current === socket) {
+        setSocketReady(socket.connected);
+        setSocketLabel(socket.connected ? "Connected" : "Connecting...");
+        return;
+      }
+
+      if (boundSocketRef.current) {
+        boundSocketRef.current.off("connect");
+        boundSocketRef.current.off("disconnect");
+        boundSocketRef.current.off(WsEvent.TERMINAL_OUTPUT);
+        boundSocketRef.current.off(WsEvent.TERMINAL_EXIT);
+        boundSocketRef.current.off(WsEvent.ERROR);
+      }
+
+      const onConnect = () => {
+        setSocketReady(true);
+        setSocketLabel("Connected");
+      };
+
+      const onDisconnect = () => {
+        setSocketReady(false);
+        setSocketLabel("Disconnected");
+      };
+
+      const onOutput = (payload: { terminalId: string; data: string }) => {
+        const currentTab = tabsRef.current.find((t) => t.id === activeTabRef.current);
+        if (!currentTab?.terminalId) return;
+        if (payload.terminalId !== currentTab.terminalId) return;
+
+        xtermRef.current?.write(payload.data ?? "");
+      };
+
+      const onExit = (payload: { terminalId: string }) => {
+        const matchedTab = tabsRef.current.find((t) => t.terminalId === payload.terminalId);
+        if (!matchedTab) return;
+
+        if (matchedTab.id === activeTabRef.current) {
+          writeLine("\x1b[33m[process exited]\x1b[0m");
+        }
+
+        setTabs((prev) =>
+          prev.map((tab) =>
+            tab.terminalId === payload.terminalId
+              ? { ...tab, terminalId: null, ready: false }
+              : tab
+          )
+        );
+      };
+
+      const onError = (payload: { message?: string }) => {
+        if (payload?.message) {
+          writeLine(`\x1b[31m${payload.message}\x1b[0m`);
+        }
+      };
+
+      socket.on("connect", onConnect);
+      socket.on("disconnect", onDisconnect);
+      socket.on(WsEvent.TERMINAL_OUTPUT, onOutput);
+      socket.on(WsEvent.TERMINAL_EXIT, onExit);
+      socket.on(WsEvent.ERROR, onError);
+
+      boundSocketRef.current = socket;
       setSocketReady(socket.connected);
       setSocketLabel(socket.connected ? "Connected" : "Connecting...");
-      return;
-    }
-
-    if (boundSocketRef.current) {
-      boundSocketRef.current.off("connect");
-      boundSocketRef.current.off("disconnect");
-      boundSocketRef.current.off(WsEvent.TERMINAL_OUTPUT);
-      boundSocketRef.current.off(WsEvent.TERMINAL_EXIT);
-      boundSocketRef.current.off(WsEvent.ERROR);
-    }
-
-    const onConnect = () => {
-      setSocketReady(true);
-      setSocketLabel("Connected");
-    };
-
-    const onDisconnect = () => {
-      setSocketReady(false);
-      setSocketLabel("Disconnected");
-    };
-
-    const onOutput = (payload: { terminalId: string; data: string }) => {
-      const currentTab = tabsRef.current.find((t) => t.id === activeTabRef.current);
-      if (!currentTab?.terminalId) return;
-      if (payload.terminalId !== currentTab.terminalId) return;
-
-      xtermRef.current?.write(payload.data ?? "");
-    };
-
-    const onExit = (payload: { terminalId: string }) => {
-      const matchedTab = tabsRef.current.find((t) => t.terminalId === payload.terminalId);
-      if (!matchedTab) return;
-
-      if (matchedTab.id === activeTabRef.current) {
-        writeLine("\x1b[33m[process exited]\x1b[0m");
-      }
-
-      setTabs((prev) =>
-        prev.map((tab) =>
-          tab.terminalId === payload.terminalId
-            ? { ...tab, terminalId: null, ready: false }
-            : tab
-        )
-      );
-    };
-
-    const onError = (payload: { message?: string }) => {
-      if (payload?.message) {
-        writeLine(`\x1b[31m${payload.message}\x1b[0m`);
-      }
-    };
-
-    socket.on("connect", onConnect);
-    socket.on("disconnect", onDisconnect);
-    socket.on(WsEvent.TERMINAL_OUTPUT, onOutput);
-    socket.on(WsEvent.TERMINAL_EXIT, onExit);
-    socket.on(WsEvent.ERROR, onError);
-
-    boundSocketRef.current = socket;
-    setSocketReady(socket.connected);
-    setSocketLabel(socket.connected ? "Connected" : "Connecting...");
-  }, [writeLine]);
+    },
+    [writeLine]
+  );
 
   const tryBindSocket = useCallback(() => {
     const socket = getSocket();
 
     if (!socket) {
       setSocketReady(false);
-      setSocketLabel(token ? "Waiting for session socket..." : "Waiting for auth token...");
+      setSocketLabel("Waiting for session socket...");
       return false;
     }
 
     bindSocketListeners(socket);
     return true;
-  }, [bindSocketListeners, token]);
+  }, [bindSocketListeners]);
 
   useEffect(() => {
     let disposed = false;
@@ -267,47 +273,50 @@ export default function Terminal({ sessionId, token }: Props) {
     xtermRef.current?.focus();
   }, [xtermReady, activeTabId]);
 
-  const spawnTerminal = useCallback((tabId: string) => {
-    const socket = getSocket();
-    const term = xtermRef.current;
+  const spawnTerminal = useCallback(
+    (tabId: string) => {
+      const socket = getSocket();
+      const term = xtermRef.current;
 
-    if (!socket?.connected || !term) {
-      clearAndWriteStatus("Socket not connected yet...");
-      return;
-    }
-
-    term.clear();
-    writeLine("\x1b[90mStarting terminal...\x1b[0m");
-
-    socket.emit(
-      WsEvent.TERMINAL_SPAWN,
-      {
-        sessionId,
-        tabId,
-        cols: term.cols,
-        rows: term.rows,
-      },
-      (response: SpawnResponse) => {
-        if (response?.error) {
-          writeLine(`\x1b[31m${response.error}\x1b[0m`);
-          return;
-        }
-
-        if (!response?.terminalId) {
-          writeLine("\x1b[31mUnable to start terminal.\x1b[0m");
-          return;
-        }
-
-        setTabs((prev) =>
-          prev.map((tab) =>
-            tab.id === tabId
-              ? { ...tab, terminalId: response.terminalId!, ready: true }
-              : tab
-          )
-        );
+      if (!socket?.connected || !term) {
+        clearAndWriteStatus("Socket not connected yet...");
+        return;
       }
-    );
-  }, [clearAndWriteStatus, sessionId, writeLine]);
+
+      term.clear();
+      writeLine("\x1b[90mStarting terminal...\x1b[0m");
+
+      socket.emit(
+        WsEvent.TERMINAL_SPAWN,
+        {
+          sessionId,
+          tabId,
+          cols: term.cols,
+          rows: term.rows,
+        },
+        (response: SpawnResponse) => {
+          if (response?.error) {
+            writeLine(`\x1b[31m${response.error}\x1b[0m`);
+            return;
+          }
+
+          if (!response?.terminalId) {
+            writeLine("\x1b[31mUnable to start terminal.\x1b[0m");
+            return;
+          }
+
+          setTabs((prev) =>
+            prev.map((tab) =>
+              tab.id === tabId
+                ? { ...tab, terminalId: response.terminalId!, ready: true }
+                : tab
+            )
+          );
+        }
+      );
+    },
+    [clearAndWriteStatus, sessionId, writeLine]
+  );
 
   useEffect(() => {
     if (!xtermReady || !socketReady || !activeTab || activeTab.ready) return;

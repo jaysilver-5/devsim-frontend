@@ -3,7 +3,12 @@
 import { useAuth } from "@clerk/nextjs";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/lib/api";
-import { connectSocket, disconnectSocket, getSocket } from "@/lib/socket";
+import {
+  connectSocket,
+  disconnectSocket,
+  getSocket,
+  reconnectSocketWithToken,
+} from "@/lib/socket";
 import { WsEvent } from "@/lib/types";
 import type { ChatMessage, TeamTicket } from "@/lib/types";
 
@@ -64,49 +69,136 @@ export default function useWorkspaceSession(
   const [chatInput, setChatInput] = useState("");
   const [chatSending, setChatSending] = useState(false);
 
-  const socketCleanupRef = useRef<(() => void) | null>(null);
+  const mountedRef = useRef(false);
 
   const hasContainer = !!session?.spriteId;
 
-  const getFreshToken = useCallback(async () => {
-    const fresh = await getToken();
-    if (!fresh) {
+  const getFreshTokens = useCallback(async () => {
+    const primary = await getToken();
+    if (!primary) {
       throw new Error("Missing auth token");
     }
-    setToken(fresh);
-    return fresh;
+
+    const retry = await getToken({ skipCache: true }).catch(() => primary);
+
+    setToken(primary);
+
+    return {
+      token: primary,
+      retryToken: retry || primary,
+    };
   }, [getToken]);
 
-  useEffect(() => {
-    let mounted = true;
+  const cleanupSocketListeners = useCallback(() => {
+    const socket = getSocket();
+    if (!socket) return;
 
-    getFreshToken()
-      .catch((err) => {
-        console.error("[workspace] Failed to get token:", err);
-      })
-      .finally(() => {
-        if (mounted) setLoading(false);
-      });
+    socket.off("connect");
+    socket.off("disconnect");
+    socket.off(WsEvent.CHAT_MESSAGE);
+    socket.off(WsEvent.CHAT_HISTORY);
+    socket.off(WsEvent.BOARD_UPDATE);
+    socket.off(WsEvent.SESSION_UPDATE);
+  }, []);
+
+  const bindSocketListeners = useCallback(() => {
+    const socket = getSocket();
+    if (!socket) return;
+
+    socket.off("connect");
+    socket.off("disconnect");
+    socket.off(WsEvent.CHAT_MESSAGE);
+    socket.off(WsEvent.CHAT_HISTORY);
+    socket.off(WsEvent.BOARD_UPDATE);
+    socket.off(WsEvent.SESSION_UPDATE);
+
+    socket.on("connect", () => {
+      if (!mountedRef.current) return;
+      setConnected(true);
+    });
+
+    socket.on("disconnect", () => {
+      if (!mountedRef.current) return;
+      setConnected(false);
+    });
+
+    socket.on(WsEvent.CHAT_MESSAGE, (msg: ChatMessage) => {
+      if (!mountedRef.current) return;
+
+      setMessages((prev) =>
+        prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]
+      );
+    });
+
+    socket.on(WsEvent.CHAT_HISTORY, (data: ChatMessage[]) => {
+      if (!mountedRef.current || !Array.isArray(data)) return;
+      setMessages(data);
+    });
+
+    socket.on(WsEvent.BOARD_UPDATE, (data: { teamTickets?: TeamTicket[] }) => {
+      if (!mountedRef.current || !Array.isArray(data?.teamTickets)) return;
+      setTeamTickets(data.teamTickets);
+    });
+
+    socket.on(WsEvent.SESSION_UPDATE, (data: Partial<WorkspaceSessionData>) => {
+      if (!mountedRef.current) return;
+
+      setSession((prev) => (prev ? { ...prev, ...data } : prev));
+
+      if (Array.isArray(data.teamTickets)) {
+        setTeamTickets(data.teamTickets);
+      }
+    });
+
+    setConnected(socket.connected);
+  }, []);
+
+  const ensureSocketConnection = useCallback(
+    async (freshToken: string) => {
+      const existing = getSocket();
+
+      if (!existing) {
+        connectSocket(freshToken, sessionId);
+        bindSocketListeners();
+        return;
+      }
+
+      reconnectSocketWithToken(freshToken);
+      bindSocketListeners();
+    },
+    [bindSocketListeners, sessionId]
+  );
+
+  useEffect(() => {
+    mountedRef.current = true;
 
     return () => {
-      mounted = false;
+      mountedRef.current = false;
+      cleanupSocketListeners();
+      disconnectSocket();
     };
-  }, [getFreshToken]);
+  }, [cleanupSocketListeners]);
 
   const refreshSession = useCallback(async () => {
     try {
-      const freshToken = await getFreshToken();
+      const { token, retryToken } = await getFreshTokens();
+
       const sess = (await api.workspace.getSession(
         sessionId,
-        freshToken
+        token,
+        retryToken
       )) as WorkspaceSessionData;
+
+      if (!mountedRef.current) return;
 
       setSession(sess);
       setTeamTickets(sess.teamTickets ?? []);
+
+      await ensureSocketConnection(token);
     } catch (err) {
       console.error("[workspace] Refresh failed:", err);
     }
-  }, [getFreshToken, sessionId]);
+  }, [ensureSocketConnection, getFreshTokens, sessionId]);
 
   const sendChat = useCallback(async () => {
     if (!chatInput.trim()) return;
@@ -133,13 +225,17 @@ export default function useWorkspaceSession(
     ]);
 
     try {
-      const freshToken = await getFreshToken();
+      const { token, retryToken } = await getFreshTokens();
+
       const result = (await api.chat.sendMessage(
         sessionId,
         content,
         target,
-        freshToken
+        token,
+        retryToken
       )) as any;
+
+      if (!mountedRef.current) return;
 
       setMessages((prev) => {
         const without = prev.filter((m) => m.id !== optimisticId);
@@ -163,30 +259,38 @@ export default function useWorkspaceSession(
 
         return next;
       });
+
+      await ensureSocketConnection(token);
     } catch (err) {
       console.error("[workspace] Chat send failed:", err);
+
+      if (!mountedRef.current) return;
+
       setMessages((prev) => prev.filter((m) => m.id !== optimisticId));
       setChatInput(content);
     } finally {
-      setChatSending(false);
+      if (mountedRef.current) {
+        setChatSending(false);
+      }
     }
-  }, [chatInput, getFreshToken, sessionId]);
+  }, [chatInput, ensureSocketConnection, getFreshTokens, sessionId]);
 
   useEffect(() => {
-    let mounted = true;
+    let cancelled = false;
 
     async function boot() {
       try {
         setLoading(true);
 
-        const freshToken = await getFreshToken();
+        const { token, retryToken } = await getFreshTokens();
 
         const sess = (await api.workspace.getSession(
           sessionId,
-          freshToken
+          token,
+          retryToken
         )) as WorkspaceSessionData;
 
-        if (!mounted) return;
+        if (cancelled || !mountedRef.current) return;
 
         setSession(sess);
         setTeamTickets(sess.teamTickets ?? []);
@@ -194,91 +298,47 @@ export default function useWorkspaceSession(
         try {
           let history = (await api.chat.getHistory(
             sessionId,
-            freshToken
+            token,
+            retryToken
           )) as ChatMessage[];
 
           if (history.length === 0) {
             try {
-              await api.workspace.sendWelcome(sessionId, freshToken);
+              await api.workspace.sendWelcome(sessionId, token, retryToken);
               history = (await api.chat.getHistory(
                 sessionId,
-                freshToken
+                token,
+                retryToken
               )) as ChatMessage[];
             } catch {
               // non-fatal
             }
           }
 
-          if (mounted) setMessages(history);
+          if (!cancelled && mountedRef.current) {
+            setMessages(history);
+          }
         } catch (err) {
           console.warn("[workspace] Chat history failed:", err);
         }
 
-        socketCleanupRef.current?.();
-
-        const socket = connectSocket(freshToken, sessionId);
-
-        socket.on("connect", () => {
-          if (mounted) setConnected(true);
-        });
-
-        socket.on("disconnect", () => {
-          if (mounted) setConnected(false);
-        });
-
-        socket.on(WsEvent.CHAT_MESSAGE, (msg: ChatMessage) => {
-          if (!mounted) return;
-          setMessages((prev) =>
-            prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]
-          );
-        });
-
-        socket.on(WsEvent.CHAT_HISTORY, (data: ChatMessage[]) => {
-          if (mounted && Array.isArray(data)) setMessages(data);
-        });
-
-        socket.on(WsEvent.BOARD_UPDATE, (data: { teamTickets?: TeamTicket[] }) => {
-          if (mounted && Array.isArray(data?.teamTickets)) {
-            setTeamTickets(data.teamTickets);
-          }
-        });
-
-        socket.on(WsEvent.SESSION_UPDATE, (data: Partial<WorkspaceSessionData>) => {
-          if (!mounted) return;
-          setSession((prev) => (prev ? { ...prev, ...data } : prev));
-          if (Array.isArray(data.teamTickets)) {
-            setTeamTickets(data.teamTickets);
-          }
-        });
-
-        if (mounted) setConnected(socket.connected);
+        await ensureSocketConnection(token);
       } catch (err) {
         console.error("[workspace] Boot failed:", err);
       } finally {
-        if (mounted) setLoading(false);
+        if (!cancelled && mountedRef.current) {
+          setLoading(false);
+        }
       }
     }
 
     boot();
 
     return () => {
-      mounted = false;
-      socketCleanupRef.current?.();
-      socketCleanupRef.current = null;
-
-      const socket = getSocket();
-      if (socket) {
-        socket.off("connect");
-        socket.off("disconnect");
-        socket.off(WsEvent.CHAT_MESSAGE);
-        socket.off(WsEvent.CHAT_HISTORY);
-        socket.off(WsEvent.BOARD_UPDATE);
-        socket.off(WsEvent.SESSION_UPDATE);
-      }
-
-      disconnectSocket();
+      cancelled = true;
+      cleanupSocketListeners();
     };
-  }, [getFreshToken, sessionId]);
+  }, [cleanupSocketListeners, ensureSocketConnection, getFreshTokens, sessionId]);
 
   return useMemo(
     () => ({

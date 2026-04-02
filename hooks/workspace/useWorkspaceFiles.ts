@@ -1,30 +1,20 @@
-// hooks/workspace/useWorkspaceFiles.ts
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useAuth } from "@clerk/nextjs";
 import { api } from "@/lib/api";
 
 type CreateMode = "file" | "folder";
 type CreateState = { parentPath: string; mode: CreateMode } | null;
 type RenameState = { path: string; type: "file" | "folder" } | null;
 
-/**
- * Manages the workspace file system.
- *
- * On mount: loads starter/snapshot files from the backend via
- *   GET /workspace/sessions/:id/starter
- *
- * On save: writes files to the container (if one exists) via
- *   POST /workspace/sessions/:id/files
- *
- * Auto-saves a full snapshot every 30 seconds via
- *   POST /workspace/sessions/:id/snapshots
- */
 export default function useWorkspaceFiles(
   sessionId: string,
   token: string | null,
   hasContainer: boolean
 ) {
+  const { getToken } = useAuth();
+
   const [fileMap, setFileMap] = useState<Record<string, string>>({});
   const [openFiles, setOpenFiles] = useState<string[]>([]);
   const [activeFile, setActiveFileState] = useState<string | null>(null);
@@ -34,13 +24,29 @@ export default function useWorkspaceFiles(
   const [renameState, setRenameState] = useState<RenameState>(null);
   const [loaded, setLoaded] = useState(false);
 
-  // ── Load starter files from backend on mount ──────
+  const getFreshTokens = useCallback(async () => {
+    const primary = await getToken();
+    if (!primary) throw new Error("Missing auth token");
+
+    const retry = await getToken({ skipCache: true }).catch(() => primary);
+    return {
+      token: primary,
+      retryToken: retry || primary,
+    };
+  }, [getToken]);
+
   useEffect(() => {
     if (!token || !sessionId || loaded) return;
 
     async function loadFiles() {
       try {
-        const resp = (await api.workspace.getStarterFiles(sessionId, token!)) as {
+        const { token: freshToken, retryToken } = await getFreshTokens();
+
+        const resp = (await api.workspace.getStarterFiles(
+          sessionId,
+          freshToken,
+          retryToken
+        )) as {
           files: Record<string, string>;
           restoredFrom?: string;
         };
@@ -49,7 +55,6 @@ export default function useWorkspaceFiles(
 
         setFileMap(resp.files);
 
-        // Auto-expand all directories that have files
         const folders = new Set<string>();
         Object.keys(resp.files).forEach((path) => {
           const parts = path.split("/");
@@ -59,7 +64,6 @@ export default function useWorkspaceFiles(
         });
         setExpandedFolders(folders);
 
-        // Auto-open the most useful file
         const paths = Object.keys(resp.files);
         const autoOpen =
           paths.find((p) => /ticket\.md$/i.test(p)) ||
@@ -72,10 +76,14 @@ export default function useWorkspaceFiles(
           setOpenFiles([autoOpen]);
         }
 
-        // If container exists, merge live file list
         if (hasContainer) {
           try {
-            const liveFiles = (await api.workspace.getFiles(sessionId, token!)) as string[];
+            const liveFiles = (await api.workspace.getFiles(
+              sessionId,
+              freshToken,
+              retryToken
+            )) as string[];
+
             if (liveFiles.length > 0) {
               setFileMap((prev) => {
                 const merged = { ...prev };
@@ -86,7 +94,7 @@ export default function useWorkspaceFiles(
               });
             }
           } catch {
-            // Container file list not available — starter is fine
+            // non-fatal
           }
         }
 
@@ -101,24 +109,29 @@ export default function useWorkspaceFiles(
     }
 
     loadFiles();
-  }, [sessionId, token, hasContainer, loaded]);
+  }, [sessionId, token, hasContainer, loaded, getFreshTokens]);
 
-  // ── Auto-save snapshot every 30s ──────────────────
   useEffect(() => {
     if (!token || !sessionId || Object.keys(fileMap).length === 0) return;
 
     const interval = setInterval(async () => {
       try {
-        await api.workspace.saveSnapshot(sessionId, "auto", fileMap, token);
+        const { token: freshToken, retryToken } = await getFreshTokens();
+        await api.workspace.saveSnapshot(
+          sessionId,
+          "auto",
+          fileMap,
+          freshToken,
+          retryToken
+        );
       } catch {
-        // Silent — auto-save is best-effort
+        // best-effort
       }
     }, 30_000);
 
     return () => clearInterval(interval);
-  }, [token, sessionId, fileMap]);
+  }, [token, sessionId, fileMap, getFreshTokens]);
 
-  // ── Ctrl+S / Cmd+S to save active file ────────────
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === "s") {
@@ -131,8 +144,6 @@ export default function useWorkspaceFiles(
   });
 
   const paths = useMemo(() => Object.keys(fileMap).sort(), [fileMap]);
-
-  // ── File operations ───────────────────────────────
 
   function setActiveFile(path: string) {
     setActiveFileState(path);
@@ -159,10 +170,16 @@ export default function useWorkspaceFiles(
       const target = path ?? activeFile;
       if (!target) return;
 
-      // Write to container if available
-      if (token && hasContainer) {
+      if (hasContainer) {
         try {
-          await api.workspace.writeFile(sessionId, target, fileMap[target] ?? "", token);
+          const { token: freshToken, retryToken } = await getFreshTokens();
+          await api.workspace.writeFile(
+            sessionId,
+            target,
+            fileMap[target] ?? "",
+            freshToken,
+            retryToken
+          );
         } catch (err) {
           console.warn("[files] Write to container failed:", err);
         }
@@ -174,10 +191,8 @@ export default function useWorkspaceFiles(
         return next;
       });
     },
-    [activeFile, fileMap, hasContainer, sessionId, token]
+    [activeFile, fileMap, hasContainer, sessionId, getFreshTokens]
   );
-
-  // ── Folder operations ─────────────────────────────
 
   function toggleFolder(path: string) {
     setExpandedFolders((prev) => {
@@ -187,8 +202,6 @@ export default function useWorkspaceFiles(
       return next;
     });
   }
-
-  // ── Create file / folder ──────────────────────────
 
   function startCreate(mode: CreateMode, parentPath = "") {
     if (parentPath) {
@@ -223,16 +236,23 @@ export default function useWorkspaceFiles(
       setFileMap((prev) => ({ ...prev, [fullPath]: "" }));
       setActiveFile(fullPath);
 
-      // Write to container immediately
-      if (token && hasContainer) {
-        api.workspace.writeFile(sessionId, fullPath, "", token).catch(() => {});
+      if (hasContainer) {
+        getFreshTokens()
+          .then(({ token: freshToken, retryToken }) =>
+            api.workspace.writeFile(
+              sessionId,
+              fullPath,
+              "",
+              freshToken,
+              retryToken
+            )
+          )
+          .catch(() => {});
       }
     }
 
     setCreateState(null);
   }
-
-  // ── Rename ────────────────────────────────────────
 
   function startRename(path: string, type: "file" | "folder") {
     setRenameState({ path, type });
@@ -274,7 +294,6 @@ export default function useWorkspaceFiles(
         return next;
       });
     } else {
-      // Rename all paths under the folder
       setFileMap((prev) => {
         const next: Record<string, string> = {};
         Object.entries(prev).forEach(([path, content]) => {
@@ -326,8 +345,6 @@ export default function useWorkspaceFiles(
 
     setRenameState(null);
   }
-
-  // ── Delete ────────────────────────────────────────
 
   function deletePath(path: string, type: "file" | "folder") {
     const isPrefix = (p: string) => p === path || p.startsWith(`${path}/`);
