@@ -1,16 +1,20 @@
+// components/workspace/eval-actions.tsx
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { useAuth } from "@clerk/nextjs";
 import { api } from "@/lib/api";
 import {
-  PlayCircle,
+  Play,
   Send,
-  RotateCcw,
+  SkipForward,
   X,
   CheckCircle,
   AlertTriangle,
   Trophy,
+  Loader2,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 
 type EvalApiResult = {
@@ -40,52 +44,38 @@ export function EvalActions({
 
   const [checking, setChecking] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [resetting, setResetting] = useState(false);
+  const [skipping, setSkipping] = useState(false);
 
   const [checkResult, setCheckResult] = useState<string | null>(null);
+  const [checkExpanded, setCheckExpanded] = useState(true);
   const [submitResult, setSubmitResult] = useState<EvalApiResult | null>(null);
   const [showOverlay, setShowOverlay] = useState(false);
+  const [showSkipConfirm, setShowSkipConfirm] = useState(false);
+
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (showOverlay && scrollRef.current) scrollRef.current.scrollTop = 0;
+  }, [showOverlay]);
 
   const getFreshTokens = useCallback(async () => {
     const primary = await getToken();
-    if (!primary) {
-      throw new Error("Missing auth token");
-    }
-
+    if (!primary) throw new Error("Missing auth token");
     const retry = await getToken({ skipCache: true }).catch(() => primary);
-
-    return {
-      token: primary,
-      retryToken: retry || primary,
-    };
+    return { token: primary, retryToken: retry || primary };
   }, [getToken]);
 
-  const normalizeOutcome = (result: EvalApiResult) => {
-    return result.outcome ?? result.status;
-  };
+  const normalizeOutcome = (r: EvalApiResult) => r.outcome ?? r.status;
 
   const handleCheck = useCallback(async () => {
     if (checking) return;
-
     setChecking(true);
     setCheckResult(null);
-
+    setCheckExpanded(true);
     try {
       const { token, retryToken } = await getFreshTokens();
-
-      const result = (await api.evaluation.runCheck(
-        sessionId,
-        token,
-        retryToken
-      )) as any;
-
-      const message =
-        result.feedback ||
-        result.message ||
-        result.terminalOutput ||
-        "Check complete. See terminal for details.";
-
-      setCheckResult(message);
+      const result = (await api.evaluation.runCheck(sessionId, token, retryToken)) as any;
+      setCheckResult(result.feedback || result.message || result.terminalOutput || "Check complete.");
     } catch (err: any) {
       setCheckResult(`Check failed: ${err.message || "Unknown error"}`);
     } finally {
@@ -95,247 +85,212 @@ export function EvalActions({
 
   const handleSubmit = useCallback(async () => {
     if (submitting) return;
-
     setSubmitting(true);
-
     try {
       const { token, retryToken } = await getFreshTokens();
-
-      const result = (await api.evaluation.submitTicket(
-        sessionId,
-        token,
-        retryToken
-      )) as EvalApiResult;
-
+      const result = (await api.evaluation.submitTicket(sessionId, token, retryToken)) as EvalApiResult;
       setSubmitResult(result);
       setShowOverlay(true);
     } catch (err: any) {
-      setSubmitResult({
-        error: err.message || "Submission failed",
-      });
+      setSubmitResult({ error: err.message || "Submission failed" });
       setShowOverlay(true);
     } finally {
       setSubmitting(false);
     }
   }, [submitting, getFreshTokens, sessionId]);
 
-  const handleReset = useCallback(async () => {
-    if (resetting) return;
-
-    const confirmed = window.confirm(
-      "Reset this ticket? You will move on, but the score for this ticket will be capped."
-    );
-
-    if (!confirmed) return;
-
-    setResetting(true);
-
+  const handleSkip = useCallback(async () => {
+    if (skipping) return;
+    setSkipping(true);
+    setShowSkipConfirm(false);
     try {
       const { token, retryToken } = await getFreshTokens();
-
-      await api.evaluation.resetTicket(
-        sessionId,
-        currentTicketSeq,
-        token,
-        retryToken
-      );
-
+      await api.evaluation.resetTicket(sessionId, currentTicketSeq, token, retryToken);
       onAdvance();
     } catch (err: any) {
-      console.error("Reset failed:", err);
-      setSubmitResult({
-        error: err.message || "Reset failed",
-      });
+      setSubmitResult({ error: err.message || "Skip failed" });
       setShowOverlay(true);
     } finally {
-      setResetting(false);
+      setSkipping(false);
     }
-  }, [resetting, getFreshTokens, sessionId, currentTicketSeq, onAdvance]);
+  }, [skipping, getFreshTokens, sessionId, currentTicketSeq, onAdvance]);
 
   const handleOverlayClose = useCallback(() => {
     const outcome = submitResult ? normalizeOutcome(submitResult) : undefined;
-
     setShowOverlay(false);
-
-    if (outcome === "passed" || outcome === "complete" || submitResult?.isComplete) {
-      onAdvance();
-    }
+    if (outcome === "passed" || outcome === "complete" || submitResult?.isComplete) onAdvance();
   }, [submitResult, onAdvance]);
 
   const outcome = submitResult ? normalizeOutcome(submitResult) : undefined;
 
   return (
     <>
+      {/* Buttons */}
       <div className="flex items-center gap-1.5">
-        <button
-          onClick={handleCheck}
-          disabled={checking}
-          className="flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-ds-border-strong bg-ds-elevated text-[10px] font-semibold text-ds-text-secondary hover:bg-ds-active disabled:opacity-40 transition-colors"
-        >
-          <PlayCircle className="w-3 h-3" />
-          {checking ? "Checking..." : "Run Checks"}
+        <button onClick={handleCheck} disabled={checking}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-ds-border-strong bg-ds-elevated text-[11px] font-semibold text-ds-text-secondary hover:bg-ds-active disabled:opacity-40 transition-colors">
+          {checking ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
+          {checking ? "Running..." : "Run Checks"}
         </button>
 
-        <button
-          onClick={handleSubmit}
-          disabled={submitting}
-          className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-ds-primary text-white text-[10px] font-semibold hover:opacity-90 disabled:opacity-40 transition-opacity"
-        >
-          <Send className="w-3 h-3" />
-          {submitting ? "Submitting..." : "Submit"}
+        <button onClick={handleSubmit} disabled={submitting}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-ds-primary text-white text-[11px] font-semibold hover:opacity-90 disabled:opacity-40 transition-opacity">
+          {submitting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+          {submitting ? "Submitting..." : "Submit Ticket"}
         </button>
 
-        <button
-          onClick={handleReset}
-          disabled={resetting}
-          className="flex items-center gap-1.5 px-2 py-1 rounded-md border border-ds-danger/30 text-[10px] font-semibold text-ds-danger hover:bg-ds-danger/8 disabled:opacity-40 transition-colors"
-          title="Reset ticket and move on with a capped score"
-        >
-          <RotateCcw className="w-3 h-3" />
+        <button onClick={() => setShowSkipConfirm(true)} disabled={skipping}
+          className="flex items-center gap-1 px-2 py-1.5 rounded-md border border-ds-border-strong text-[11px] font-medium text-ds-text-faint hover:text-ds-warning hover:border-ds-warning/30 hover:bg-ds-warning/8 disabled:opacity-40 transition-colors"
+          title="Skip this ticket (score will be capped)">
+          {skipping ? <Loader2 className="w-3 h-3 animate-spin" /> : <SkipForward className="w-3 h-3" />}
+          <span className="hidden sm:inline">Skip</span>
         </button>
       </div>
 
+      {/* Check Result */}
       {checkResult && (
-        <div className="fixed bottom-4 right-4 z-50 max-w-sm p-3.5 rounded-lg bg-ds-elevated border border-ds-border shadow-xl animate-in slide-in-from-bottom-2">
-          <div className="flex items-start gap-2">
-            <PlayCircle className="w-4 h-4 text-ds-info shrink-0 mt-0.5" />
-            <div className="flex-1 min-w-0">
-              <div className="text-[11px] font-semibold text-ds-text mb-1">
-                Check Result
-              </div>
-              <div className="text-[11px] text-ds-text-dim leading-relaxed whitespace-pre-wrap">
-                {checkResult}
-              </div>
+        <div className="fixed bottom-4 right-4 z-50 w-[400px] max-w-[calc(100vw-2rem)] rounded-xl bg-ds-elevated border border-ds-border shadow-2xl overflow-hidden animate-in slide-in-from-bottom-3">
+          <div className="flex items-center justify-between px-4 py-2.5 bg-ds-surface/50 border-b border-ds-border-subtle">
+            <div className="flex items-center gap-2">
+              <Play className="w-3.5 h-3.5 text-ds-info" />
+              <span className="text-[11px] font-semibold text-ds-text">Check Results</span>
             </div>
-            <button
-              onClick={() => setCheckResult(null)}
-              className="text-ds-text-faint hover:text-ds-text-muted"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
+            <div className="flex items-center gap-1">
+              <button onClick={() => setCheckExpanded(!checkExpanded)} className="text-ds-text-faint hover:text-ds-text-muted p-0.5">
+                {checkExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronUp className="w-3.5 h-3.5" />}
+              </button>
+              <button onClick={() => setCheckResult(null)} className="text-ds-text-faint hover:text-ds-text-muted p-0.5">
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+          {checkExpanded && (
+            <div className="max-h-[300px] overflow-y-auto p-4">
+              <pre className="text-[11px] text-ds-text-dim leading-relaxed whitespace-pre-wrap font-mono">{checkResult}</pre>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Skip Confirm */}
+      {showSkipConfirm && (
+        <div className="fixed inset-0 z-[80] bg-ds-base/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-sm rounded-xl bg-ds-surface border border-ds-border shadow-2xl p-5">
+            <div className="w-12 h-12 rounded-full bg-ds-warning/15 flex items-center justify-center mx-auto mb-4">
+              <SkipForward className="w-6 h-6 text-ds-warning" />
+            </div>
+            <h3 className="text-base font-semibold text-ds-text text-center mb-2">Skip this ticket?</h3>
+            <p className="text-sm text-ds-text-dim text-center leading-relaxed mb-5">
+              You&apos;ll move to the next ticket, but your score for this one will be capped at the minimum passing rate.
+            </p>
+            <div className="flex gap-2">
+              <button onClick={() => setShowSkipConfirm(false)}
+                className="flex-1 py-2.5 rounded-lg border border-ds-border-strong text-sm font-medium text-ds-text-secondary hover:bg-ds-elevated transition-colors">
+                Keep working
+              </button>
+              <button onClick={handleSkip}
+                className="flex-1 py-2.5 rounded-lg bg-ds-warning/15 border border-ds-warning/25 text-sm font-medium text-ds-warning hover:bg-ds-warning/25 transition-colors">
+                Skip ticket
+              </button>
+            </div>
           </div>
         </div>
       )}
 
+      {/* Submit Overlay — WIDER (max-w-lg) + scrollable + sticky button */}
       {showOverlay && submitResult && (
-        <div className="fixed inset-0 z-50 bg-ds-base/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="w-full max-w-md p-6 rounded-xl bg-ds-surface border border-ds-border shadow-2xl">
-            {submitResult.error ? (
-              <>
-                <div className="w-14 h-14 rounded-full bg-ds-danger/15 flex items-center justify-center mx-auto mb-4">
-                  <AlertTriangle className="w-7 h-7 text-ds-danger" />
-                </div>
-                <h2 className="text-lg font-semibold text-ds-text text-center mb-2">
-                  Submission Failed
-                </h2>
-                <p className="text-sm text-ds-text-dim text-center mb-5">
-                  {submitResult.error}
-                </p>
-              </>
-            ) : outcome === "complete" || submitResult.isComplete ? (
-              <>
-                <div className="w-14 h-14 rounded-full bg-ds-success/15 flex items-center justify-center mx-auto mb-4">
-                  <Trophy className="w-7 h-7 text-ds-success" />
-                </div>
-                <h2 className="text-lg font-semibold text-ds-text text-center mb-2">
-                  Sprint Complete!
-                </h2>
-                <p className="text-sm text-ds-text-dim text-center mb-5">
-                  You&apos;ve completed all tickets. View your full scorecard.
-                </p>
-              </>
-            ) : outcome === "passed" ? (
-              <>
-                <div className="w-14 h-14 rounded-full bg-ds-success/15 flex items-center justify-center mx-auto mb-4">
-                  <CheckCircle className="w-7 h-7 text-ds-success" />
-                </div>
-                <h2 className="text-lg font-semibold text-ds-text text-center mb-2">
-                  Ticket Passed!
-                </h2>
-                <p className="text-sm text-ds-text-dim text-center mb-3">
-                  Moving to the next ticket.
-                </p>
-              </>
-            ) : (
-              <>
-                <div className="w-14 h-14 rounded-full bg-ds-warning/15 flex items-center justify-center mx-auto mb-4">
-                  <AlertTriangle className="w-7 h-7 text-ds-warning" />
-                </div>
-                <h2 className="text-lg font-semibold text-ds-text text-center mb-2">
-                  Below Threshold
-                </h2>
-                <p className="text-sm text-ds-text-dim text-center mb-3">
-                  Keep working on it or use Reset to move on.
-                </p>
-                {typeof submitResult.minimumRequired === "number" && (
-                  <p className="text-xs text-ds-text-faint text-center mb-2">
-                    Minimum required: {submitResult.minimumRequired}%
-                  </p>
-                )}
-              </>
-            )}
-
-            {submitResult.scores && (
-              <div className="grid grid-cols-2 gap-2 mb-5">
-                {Object.entries(submitResult.scores).map(([key, val]) => (
-                  <div
-                    key={key}
-                    className="p-2.5 rounded-lg bg-ds-base border border-ds-border text-center"
-                  >
-                    <div className="text-[10px] text-ds-text-faint capitalize mb-0.5">
-                      {key.replace(/([A-Z])/g, " $1").trim()}
-                    </div>
-                    <div
-                      className={`text-lg font-bold ${
-                        val >= 80
-                          ? "text-ds-success"
-                          : val >= 60
-                          ? "text-ds-warning"
-                          : "text-ds-danger"
-                      }`}
-                    >
-                      {val}
-                    </div>
+        <div className="fixed inset-0 z-[80] bg-ds-base/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-lg max-h-[88vh] rounded-xl bg-ds-surface border border-ds-border shadow-2xl flex flex-col overflow-hidden">
+            <div ref={scrollRef} className="flex-1 overflow-y-auto p-6">
+              {/* Header */}
+              {submitResult.error ? (
+                <div className="text-center mb-5">
+                  <div className="w-14 h-14 rounded-full bg-ds-danger/15 flex items-center justify-center mx-auto mb-3">
+                    <AlertTriangle className="w-7 h-7 text-ds-danger" />
                   </div>
-                ))}
-              </div>
-            )}
+                  <h2 className="text-lg font-semibold text-ds-text">Submission Failed</h2>
+                  <p className="text-sm text-ds-text-dim mt-1">{submitResult.error}</p>
+                </div>
+              ) : outcome === "complete" || submitResult.isComplete ? (
+                <div className="text-center mb-5">
+                  <div className="w-14 h-14 rounded-full bg-ds-success/15 flex items-center justify-center mx-auto mb-3">
+                    <Trophy className="w-7 h-7 text-ds-success" />
+                  </div>
+                  <h2 className="text-lg font-semibold text-ds-text">Sprint Complete!</h2>
+                  <p className="text-sm text-ds-text-dim mt-1">All tickets done. Your scorecard is ready.</p>
+                </div>
+              ) : outcome === "passed" ? (
+                <div className="text-center mb-5">
+                  <div className="w-14 h-14 rounded-full bg-ds-success/15 flex items-center justify-center mx-auto mb-3">
+                    <CheckCircle className="w-7 h-7 text-ds-success" />
+                  </div>
+                  <h2 className="text-lg font-semibold text-ds-text">Ticket Passed</h2>
+                  <p className="text-sm text-ds-text-dim mt-1">Nice work. Moving to the next ticket.</p>
+                </div>
+              ) : (
+                <div className="text-center mb-5">
+                  <div className="w-14 h-14 rounded-full bg-ds-warning/15 flex items-center justify-center mx-auto mb-3">
+                    <AlertTriangle className="w-7 h-7 text-ds-warning" />
+                  </div>
+                  <h2 className="text-lg font-semibold text-ds-text">Below Threshold</h2>
+                  <p className="text-sm text-ds-text-dim mt-1">Keep working on it, or skip to move on.</p>
+                  {typeof submitResult.minimumRequired === "number" && (
+                    <p className="text-xs text-ds-text-faint mt-1">Minimum: {submitResult.minimumRequired}%</p>
+                  )}
+                </div>
+              )}
 
-            {(submitResult.feedback ||
-              submitResult.terminalOutput ||
-              submitResult.triggerMessage) && (
-              <div className="space-y-3 mb-5">
-                {(submitResult.feedback || submitResult.terminalOutput) && (
-                  <div className="p-3 rounded-lg bg-ds-base border border-ds-border">
-                    <div className="text-[11px] text-ds-text-dim leading-relaxed whitespace-pre-wrap">
+              {/* Scores */}
+              {submitResult.scores && (
+                <div className="grid grid-cols-2 gap-2.5 mb-5">
+                  {Object.entries(submitResult.scores).map(([key, val]) => (
+                    <div key={key} className="p-3 rounded-lg bg-ds-base border border-ds-border">
+                      <div className="text-[10px] text-ds-text-faint capitalize mb-1">
+                        {key.replace(/([A-Z])/g, " $1").trim()}
+                      </div>
+                      <div className="flex items-end gap-1">
+                        <span className={`text-xl font-bold tabular-nums ${val >= 80 ? "text-ds-success" : val >= 60 ? "text-ds-warning" : "text-ds-danger"}`}>
+                          {val}
+                        </span>
+                        <span className="text-xs text-ds-text-faint mb-0.5">/100</span>
+                      </div>
+                      <div className="mt-1.5 h-1 rounded-full bg-ds-border overflow-hidden">
+                        <div className={`h-full rounded-full transition-all ${val >= 80 ? "bg-ds-success" : val >= 60 ? "bg-ds-warning" : "bg-ds-danger"}`} style={{ width: `${val}%` }} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Feedback / terminal output */}
+              {(submitResult.feedback || submitResult.terminalOutput) && (
+                <div className="mb-4">
+                  <div className="text-[10px] font-semibold text-ds-text-faint uppercase tracking-wider mb-2">Review</div>
+                  <div className="p-3.5 rounded-lg bg-ds-base border border-ds-border max-h-[220px] overflow-y-auto">
+                    <pre className="text-[11px] text-ds-text-dim leading-relaxed whitespace-pre-wrap font-mono">
                       {submitResult.feedback || submitResult.terminalOutput}
-                    </div>
+                    </pre>
                   </div>
-                )}
+                </div>
+              )}
 
-                {submitResult.triggerMessage && (
-                  <div className="p-3 rounded-lg bg-ds-primary/8 border border-ds-primary/15">
-                    <div className="text-[10px] font-semibold text-ds-primary-muted mb-1">
-                      Team update
-                    </div>
-                    <div className="text-[11px] text-ds-text-dim leading-relaxed whitespace-pre-wrap">
-                      {submitResult.triggerMessage}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
+              {submitResult.triggerMessage && (
+                <div className="p-3.5 rounded-lg bg-ds-primary/8 border border-ds-primary/15 mb-4">
+                  <div className="text-[10px] font-semibold text-ds-primary-muted mb-1">Team update</div>
+                  <div className="text-[12px] text-ds-text-dim leading-relaxed">{submitResult.triggerMessage}</div>
+                </div>
+              )}
+            </div>
 
-            <button
-              onClick={handleOverlayClose}
-              className="w-full py-2.5 rounded-lg bg-ds-primary text-white text-sm font-semibold hover:opacity-90 transition-opacity"
-            >
-              {outcome === "complete" || submitResult.isComplete
-                ? "View Report"
-                : outcome === "passed"
-                ? "Continue"
-                : "Keep Working"}
-            </button>
+            {/* Sticky footer */}
+            <div className="shrink-0 px-6 pb-5 pt-3 border-t border-ds-border-subtle bg-ds-surface">
+              <button onClick={handleOverlayClose}
+                className="w-full py-3 rounded-lg bg-ds-primary text-white text-sm font-semibold hover:opacity-90 transition-opacity">
+                {outcome === "complete" || submitResult.isComplete ? "View Report"
+                  : outcome === "passed" ? "Next Ticket"
+                  : "Keep Working"}
+              </button>
+            </div>
           </div>
         </div>
       )}

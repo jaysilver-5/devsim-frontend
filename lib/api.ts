@@ -324,6 +324,20 @@ const standup = {
       retryToken: retryToken || undefined,
     }),
 
+  completeTurnText: (
+    standupId: string,
+    turnNumber: number,
+    text: string,
+    token?: string,
+    retryToken?: string
+  ) =>
+    request(`/standup/${standupId}/turn/${turnNumber}/complete-text`, {
+      method: "POST",
+      body: { text },
+      token: token || undefined,
+      retryToken: retryToken || undefined,
+    }),
+
   getStatus: (
     sessionId: string,
     standupNumber: number,

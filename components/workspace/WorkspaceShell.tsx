@@ -12,9 +12,68 @@ import { StandupCall } from "@/components/standup/StandupCall";
 
 import useWorkspaceSession from "@/hooks/workspace/useWorkspaceSession";
 import useWorkspaceFiles from "@/hooks/workspace/useWorkspaceFiles";
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 
 const Terminal = dynamic(() => import("./terminal/Terminal"), { ssr: false });
+
+// ─── Loading screen ─────────────────────────────────────
+
+const BOOT_STEPS = [
+  "Connecting to workspace...",
+  "Provisioning container...",
+  "Loading project files...",
+  "Starting dev server...",
+  "Syncing team board...",
+  "Almost ready...",
+];
+
+function WorkspaceLoading() {
+  const [step, setStep] = useState(0);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setStep((s) => (s < BOOT_STEPS.length - 1 ? s + 1 : s));
+    }, 1200);
+    return () => clearInterval(timer);
+  }, []);
+
+  return (
+    <div className="h-screen flex items-center justify-center bg-ds-base">
+      <div className="text-center w-full max-w-[280px]">
+        <div className="text-lg font-bold text-ds-primary-muted mb-6 tracking-tight">
+          devsim
+        </div>
+        <div className="h-1 rounded-full bg-ds-border overflow-hidden mb-4">
+          <div
+            className="h-full rounded-full bg-ds-primary transition-all duration-1000 ease-out"
+            style={{ width: `${((step + 1) / BOOT_STEPS.length) * 100}%` }}
+          />
+        </div>
+        <div className="space-y-1.5 text-left">
+          {BOOT_STEPS.slice(0, step + 1).map((label, i) => (
+            <div
+              key={i}
+              className={`flex items-center gap-2 text-xs transition-all duration-300 ${
+                i === step ? "text-ds-text-secondary" : "text-ds-text-faint"
+              }`}
+            >
+              {i < step ? (
+                <span className="text-ds-success text-[10px]">✓</span>
+              ) : (
+                <span className="w-3 h-3 rounded-full border border-ds-primary/40 flex items-center justify-center">
+                  <span className="w-1.5 h-1.5 rounded-full bg-ds-primary animate-pulse" />
+                </span>
+              )}
+              {label}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Main workspace ─────────────────────────────────────
 
 export default function WorkspaceShell({ sessionId }: { sessionId: string }) {
   const session = useWorkspaceSession(sessionId);
@@ -22,38 +81,65 @@ export default function WorkspaceShell({ sessionId }: { sessionId: string }) {
 
   const [showStandup, setShowStandup] = useState(false);
   const [standupNumber, setStandupNumber] = useState(1);
+
+  // Track which standup numbers have been completed/dismissed
+  // to prevent the standup from re-triggering on session refresh
+  const completedStandupsRef = useRef<Set<number>>(new Set());
+  const standupTriggeredRef = useRef(false);
+
   const isStandupPending = session.session?.status === "STANDUP_PENDING";
 
+  // Determine the right standup number from the session data
   useEffect(() => {
-    if (isStandupPending && !showStandup) {
+    if (!session.session) return;
+
+    const standups = (session.session as any)?.standups;
+    if (Array.isArray(standups)) {
+      const pending = standups.find((s: any) => s.status === "PENDING");
+      if (pending) {
+        setStandupNumber(pending.standupNumber);
+      }
+    }
+  }, [session.session]);
+
+  // Trigger standup when status is STANDUP_PENDING
+  // But only if we haven't already completed/dismissed this one
+  useEffect(() => {
+    if (
+      isStandupPending &&
+      !showStandup &&
+      !standupTriggeredRef.current &&
+      !completedStandupsRef.current.has(standupNumber)
+    ) {
+      standupTriggeredRef.current = true;
       setShowStandup(true);
     }
-  }, [isStandupPending, showStandup]);
+
+    if (!isStandupPending) {
+      standupTriggeredRef.current = false;
+    }
+  }, [isStandupPending, showStandup, standupNumber]);
 
   const handleStandupComplete = useCallback(() => {
+    completedStandupsRef.current.add(standupNumber);
+    standupTriggeredRef.current = false;
     setShowStandup(false);
-    setStandupNumber((n) => n + 1);
-    session.refreshSession();
-  }, [session]);
+
+    // Small delay before refreshing so the session status update propagates
+    setTimeout(() => {
+      session.refreshSession();
+    }, 500);
+  }, [session, standupNumber]);
 
   const handleStandupEnd = useCallback(() => {
+    completedStandupsRef.current.add(standupNumber);
+    standupTriggeredRef.current = false;
     setShowStandup(false);
     session.refreshSession();
-  }, [session]);
+  }, [session, standupNumber]);
 
   if (session.loading || !files.loaded) {
-    return (
-      <div className="h-screen flex items-center justify-center bg-ds-base">
-        <div className="text-center">
-          <div className="text-lg font-bold text-ds-primary-muted mb-2 tracking-tight">
-            devsim
-          </div>
-          <div className="text-xs text-ds-text-dim animate-pulse">
-            Loading workspace...
-          </div>
-        </div>
-      </div>
-    );
+    return <WorkspaceLoading />;
   }
 
   return (

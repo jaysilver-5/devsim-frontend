@@ -205,11 +205,25 @@ export enum WsEvent {
   BEHAVIORAL_EVENT = "behavioral:event",
   SESSION_UPDATE = "session:update",
   SESSION_STATUS = "session:status",
+
+  // Standup — new WebSocket-first voice flow
+  STANDUP_BEGIN = "standup:begin",
+  STANDUP_PM_SPEAKING = "standup:pm_speaking",
+  STANDUP_READY = "standup:ready",
+  STANDUP_AUDIO_CHUNK = "standup:audio_chunk",
+  STANDUP_INTERIM = "standup:interim",
+  STANDUP_END_TURN = "standup:end_turn",
+  STANDUP_PROCESSING = "standup:processing",
+  STANDUP_TURN_RESULT = "standup:turn_result",
+  STANDUP_COMPLETE = "standup:complete",
+  STANDUP_STATE = "standup:state",
+  STANDUP_ERROR = "standup:error",
+
+  // Legacy aliases
   STANDUP_START = "standup:start",
   STANDUP_PM_AUDIO = "standup:pm_audio",
   STANDUP_CANDIDATE_AUDIO = "standup:candidate_audio",
   STANDUP_TRANSCRIPT = "standup:transcript",
-  STANDUP_COMPLETE = "standup:complete",
-  STANDUP_STATE = "standup:state",
+
   ERROR = "error",
 }
