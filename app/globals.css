@@ -1,0 +1,259 @@
+/* app/globals.css */
+@import "tailwindcss";
+
+/* ═══════════════════════════════════════════════════════
+   DevSim Design System — "Midnight Workspace"
+   ═══════════════════════════════════════════════════════ */
+
+:root {
+  --ws-bg: #0b1020;
+  --ws-panel: #0f1524;
+  --ws-panel-2: #0f1728;
+  --ws-panel-3: #111b2e;
+  --ws-border: rgba(255,255,255,0.08);
+  --ws-border-soft: rgba(255,255,255,0.05);
+  --ws-text: #d9e1f2;
+  --ws-text-soft: rgba(217,225,242,0.7);
+  --ws-text-faint: rgba(217,225,242,0.4);
+  --ws-accent: #2f81f7;
+  --ws-accent-soft: rgba(47,129,247,0.16);
+}
+
+@theme {
+  /* ─── Surface palette (plum-black undertone) ─────── */
+  --color-ds-base: #0C0C14;
+  --color-ds-surface: #13131F;
+  --color-ds-elevated: #1A1A2B;
+  --color-ds-panel: #222236;
+  --color-ds-active: #2C2C42;
+  --color-ds-hover: #35354D;
+
+  /* ─── Text ──────────────────────────────────────── */
+  --color-ds-text: #E8E6F0;
+  --color-ds-text-secondary: #C8C6D8;
+  --color-ds-text-muted: #8B89A0;
+  --color-ds-text-dim: #7B7990;
+  --color-ds-text-faint: #4A4862;
+  --color-ds-text-ghost: #3A3A52;
+
+  /* ─── Border ────────────────────────────────────── */
+  --color-ds-border: #1E1E30;
+  --color-ds-border-subtle: #1A1A2B;
+  --color-ds-border-strong: #2C2C42;
+
+  /* ─── Primary (purple) ──────────────────────────── */
+  --color-ds-primary: #6C5CE7;
+  --color-ds-primary-hover: #7C6EF0;
+  --color-ds-primary-muted: #A29BFE;
+  --color-ds-primary-bg: oklch(from #6C5CE7 l c h / 0.1);
+  --color-ds-primary-border: oklch(from #6C5CE7 l c h / 0.2);
+
+  /* ─── Accents ───────────────────────────────────── */
+  --color-ds-success: #00D2A0;
+  --color-ds-success-bg: oklch(from #00D2A0 l c h / 0.1);
+  --color-ds-danger: #FF6B6B;
+  --color-ds-danger-bg: oklch(from #FF6B6B l c h / 0.1);
+  --color-ds-warning: #F9A826;
+  --color-ds-warning-bg: oklch(from #F9A826 l c h / 0.08);
+  --color-ds-info: #4ECDC4;
+  --color-ds-info-bg: oklch(from #4ECDC4 l c h / 0.1);
+
+  /* ─── Persona colors ────────────────────────────── */
+  --color-persona-sarah: #A29BFE;
+  --color-persona-marcus: #00D2A0;
+  --color-persona-priya: #E17055;
+  --color-persona-james: #4ECDC4;
+
+  /* ─── Difficulty ────────────────────────────────── */
+  --color-diff-beginner: #00D2A0;
+  --color-diff-intermediate: #F9A826;
+  --color-diff-advanced: #FF6B6B;
+
+  /* ─── Radius ────────────────────────────────────── */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 12px;
+  --radius-pill: 9999px;
+
+  /* ─── Font ──────────────────────────────────────── */
+  --font-sans: "Geist", system-ui, -apple-system, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "Cascadia Code", monospace;
+}
+
+/* ═══════════════════════════════════════════════════════
+   Global base styles
+   ═══════════════════════════════════════════════════════ */
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  background: var(--color-ds-base);
+  color: var(--color-ds-text-secondary);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ─── Selection ─────────────────────────────────────── */
+::selection {
+  background: oklch(from var(--color-ds-primary) l c h / 0.35);
+  color: #fff;
+}
+
+/* ─── Scrollbar ─────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-ds-active);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-ds-hover);
+}
+
+/* ─── Focus ring ────────────────────────────────────── */
+:focus-visible {
+  outline: 2px solid var(--color-ds-primary);
+  outline-offset: 2px;
+  border-radius: var(--radius-md);
+}
+
+/* ─── Input base ────────────────────────────────────── */
+input,
+textarea,
+select {
+  font-family: inherit;
+}
+
+/* ─── Transition defaults ───────────────────────────── */
+button,
+a,
+input {
+  transition: all 0.15s ease;
+}
+
+.icon-btn {
+  padding: 6px;
+  border-radius: 6px;
+  color: rgb(255 255 255 / 0.5);
+}
+
+.icon-btn:hover {
+  background: rgb(255 255 255 / 0.08);
+  color: white;
+}
+
+.icon-btn-sm {
+  padding: 4px;
+  border-radius: 4px;
+  color: rgb(255 255 255 / 0.4);
+}
+
+.icon-btn-sm:hover {
+  background: rgb(255 255 255 / 0.08);
+  color: white;
+}
+
+.terminal-action-btn {
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 6px;
+  border: 1px solid rgb(255 255 255 / 0.1);
+  background: rgb(255 255 255 / 0.04);
+  color: rgb(255 255 255 / 0.75);
+  font-size: 12px;
+}
+
+.terminal-action-btn:hover {
+  background: rgb(255 255 255 / 0.08);
+  color: white;
+}
+.ide-panel {
+  background: var(--ws-panel);
+  border-color: var(--ws-border-soft);
+}
+
+.ide-topbar {
+  background: var(--ws-panel-2);
+  border-color: var(--ws-border);
+}
+
+.ide-active {
+  background: var(--ws-panel-3);
+  color: #fff;
+}
+
+.ide-muted {
+  color: var(--ws-text-faint);
+}
+
+.ide-soft {
+  color: var(--ws-text-soft);
+}
+
+.ide-input {
+  height: 34px;
+  border: 1px solid var(--ws-border);
+  background: #0b1020;
+  color: var(--ws-text);
+  border-radius: 6px;
+  padding: 0 10px;
+  outline: none;
+}
+
+.ide-input::placeholder {
+  color: rgba(255,255,255,0.25);
+}
+
+.ide-input:focus {
+  border-color: var(--ws-accent);
+  box-shadow: 0 0 0 1px var(--ws-accent-soft);
+}
+
+.icon-btn {
+  padding: 6px;
+  border-radius: 6px;
+  color: rgba(255,255,255,0.52);
+}
+
+.icon-btn:hover {
+  background: rgba(255,255,255,0.08);
+  color: white;
+}
+
+.icon-btn-sm {
+  padding: 4px;
+  border-radius: 4px;
+  color: rgba(255,255,255,0.42);
+}
+
+.icon-btn-sm:hover {
+  background: rgba(255,255,255,0.08);
+  color: white;
+}
+
+.terminal-action-btn {
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 6px;
+  border: 1px solid var(--ws-border);
+  background: rgba(255,255,255,0.04);
+  color: rgba(255,255,255,0.76);
+  font-size: 12px;
+}
+
+.terminal-action-btn:hover {
+  background: rgba(255,255,255,0.08);
+  color: white;
+}
